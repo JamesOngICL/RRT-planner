@@ -4,8 +4,73 @@ import matplotlib.pyplot as plt
 import matplotlib
 import numpy as np
 import math
+from shapely import Polygon
+import shapely.geometry
 
 
+#get the x1, y1 and x2, y2 points 
+x1_point,y1_point = 1,2
+x2_point,y2_point = 3,8
+
+def map_first_two_points(x1,y1,x2,y2,angle,diff=0.5):
+    '''
+    This function is used to map the first two points
+    onto the output space
+
+    Args: 
+    x1,y1,x2,y2,angle
+    '''
+
+    # establish and define a series of two points
+    if diff>0:
+        point_1 = np.array([[-diff],[-diff]])
+        point_2 = np.array([[-diff],[diff]])
+    elif diff<0:
+        point_1 = np.array([[-diff],[diff]])
+        point_2 = np.array([[-diff],[-diff]])
+    
+    #have a way of mapping angles between degrees and radians
+    rad_ang = math.radians(angle)
+
+    # define the relevant rotation parameters for the model
+    rot_mat = np.array([[math.cos(rad_ang),-math.sin(rad_ang)],[math.sin(rad_ang),math.cos(rad_ang)]])
+
+    # obtain the rotations of the two points to get the outputs
+    rot_first = np.matmul(rot_mat,point_1)
+    rot_sec = np.matmul(rot_mat,point_2)
+
+    #gets the first and second points post rotation
+    map_first = [x1+rot_first[0],y1+rot_first[1]]
+    map_sec = [x2+rot_sec[0],y2+rot_sec[1]]
+
+    return map_first,map_sec
+
+#get the mapping of the first two points by transformation.
+p1, p2 = map_first_two_points(x1_point,y1_point,x2_point,y2_point,0,diff=0.5)
+p3, p4 = map_first_two_points(x1_point,y1_point,x2_point,y2_point,0,diff=-0.5)
+
+print(p1,p3)
+
+#gets a line segment. 
+get_segment_1 = shapely.geometry.LineString([p1, p2])
+get_segment_2 = shapely.geometry.LineString([p3, p4])
+circle = shapely.Point(2, 3).buffer(0.6)
+
+#get the series of values
+seg_series = gpd.GeoSeries([get_segment_1,get_segment_2,circle])
+
+#plot the first and second geoseries values
+seg_series.plot(alpha=0.5)
+my_intersection = shapely.intersects(circle,get_segment_1)
+print(my_intersection)
+
+my_intersection2 = shapely.intersects(circle,get_segment_2)
+print(my_intersection2)
+
+#show the values
+plt.show()
+
+'''
 
 fig = plt.figure() 
 ax = fig.add_subplot(111) 
@@ -41,7 +106,7 @@ plt.ylim([-400, 400])
   
 plt.show() 
 
-
+'''
 
 '''
 def test_shapes():
@@ -140,4 +205,5 @@ plt.show()
 #this will plot the single shape
 # new_series.plot()
 # plt.show()
+
 '''
