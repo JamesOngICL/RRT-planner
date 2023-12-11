@@ -1,5 +1,3 @@
-import numpy as np
-
 import math
 import random
 import shapely
@@ -7,13 +5,39 @@ import numpy as np
 import matplotlib.pyplot as plt 
 import geopandas as gpd
 import shapely.geometry
-import pygame
 import time
+import csv
+import multiprocessing
+# Averages: [145,340,421,470,476]
 
 #define the window width and height params. 
-py_width,py_height = 750,750
+py_width,py_height = 600,600
 max_width,max_height = 2500,2500
-goal=[19,17]
+
+def get_dist(path_list):
+    '''
+    This function returns the distance from source to end node 
+
+    Args:
+    type(list) --> path_list containing all objects on path.
+
+    Outputs:
+    type(float) --> dist
+
+    '''
+    curr_dist = 0
+
+    for i in range(1,len(path_list)):
+        prev_node = path_list[i-1]
+        curr_coords = path_list[i].coords
+        c_x,c_y = curr_coords[0],curr_coords[1]
+        p_x,p_y = prev_node.coords[0],prev_node.coords[1]
+        dist = (c_x-p_x)**2+(c_y-p_y)**2
+        dist = math.sqrt(dist)
+        curr_dist += dist
+    
+    return curr_dist
+
 
 class robotNode():
 
@@ -38,9 +62,10 @@ class robotNode():
         self.xsteps = []
         self.ysteps = []
 
+
 class rrt_initializer():
 
-    def __init__(self,max_iter=50,start=[0.5,0.5],end=goal):
+    def __init__(self,max_iter=1000,start=[0.5,0.5],end=[19,17]):
         #this assumes the robot starts from a position of 0,0 in the bottom left corner o.e.
         self.start = start
         self.end = end
@@ -61,7 +86,7 @@ class rrt_initializer():
             parent = self.node_list[par_idx]
 
             p_x,p_y = parent.coords[0],parent.coords[1]
-            p_theta,p_phi = parent.head_angle, parent.phi
+            p_theta,p_phi = parent.head_angle,parent.phi
             x,y,theta,phi,u1 = self.update_position(p_x,p_y,p_theta,p_phi)
 
             #get the coordinates from the parent node 
@@ -90,37 +115,37 @@ class rrt_initializer():
             #ensures that we are minimally distant to the node
             if check_true:
                 path_list = self.return_path(new_node)
-                return path_list,"T"
+                return path_list[0],min_dist_node.dist_travelled,"T"
 
         dist_idx = self.get_min_dist()
         min_dist_node = self.node_list[dist_idx]
+        get_path = self.return_path(min_dist_node)
 
-        return self.return_path(min_dist_node),"F"
+        return get_path[0],min_dist_node.dist_travelled,"F"
 
     # Function to update the position and orientation
     def update_position(self,init_x, init_y, init_theta,init_phi, L=1.0):
         samples = 0
-        g_x,g_y = goal[0],goal[1]
+        g_x,g_y = self.end[0],self.end[1]
         min_dist = float('inf')
-        count = 0
-        #valid coordinates are generated however we do not 
-        top_x,top_y,top_theta,top_phi = 0,0,0,0
-
+        #valid coordinates are generated however we do not
+        #  
         while samples<10:
             # Update the steering angle
             #get the angle and phi params. 
             u1 = random.randrange(2,80)/10
             u2 = math.pi*random.randrange(0,360)/180
+            top_x,top_y,top_theta,top_phi = 0,0,0,0
 
             phi = (init_phi+u2)%360
-            count += 1
             phi = phi%360
             # Update the orientation
             theta = init_theta+(u1 / L) * np.tan(phi) 
             # Update the position
-            x = init_x+u1 * np.cos(theta)
-            y = init_y+u1 * np.sin(theta)
-            if x<0 or y<0 or x>25 or y>25:
+            x = init_x+u1*np.cos(theta)
+            y = init_y+u1*np.sin(theta)
+
+            if x<0 or y<0:
                 continue
 
             p1,p2 = map_first_two_points(x,y,init_x,init_y,0,diff=0.5)
@@ -141,11 +166,11 @@ class rrt_initializer():
             if collision_status==True:
                 samples += 1
 
-                #obtain new parameters
-                if min_dist>goal_dist :
-                    top_x,top_y,top_theta,top_phi = x,y,theta,phi    
-                    best_u1 = u1          
-                    min_dist = goal_dist
+            #obtain new parameters
+            if min_dist>goal_dist :
+                top_x,top_y,top_theta,top_phi = x,y,theta,phi    
+                best_u1 = u1          
+                min_dist = goal_dist
 
         #return u1 too as it contributes to the path length. 
         return top_x,top_y,top_theta,top_phi,best_u1
@@ -202,21 +227,25 @@ class rrt_initializer():
             
         return True
     
-
     def return_path(self,end_node):
         '''
         Check the path nodes that are there.
         '''
         path_nodes = []
-
+        tot_dist = 0
         #loop through the parent nodes and check that they are on path.
         while end_node.parent!=None:
+            #obtain the distance between the nodes at each iteration
+            x_dist = (end_node.parent.coords[0]-end_node.coords[0])
+            y_dist = (end_node.parent.coords[1]-end_node.coords[1])
+            tot_dist += math.sqrt(x_dist**2+y_dist**2)
+
             path_nodes.insert(0,end_node)
             end_node = end_node.parent
 
         path_nodes.insert(0,end_node)
 
-        return path_nodes
+        return path_nodes,tot_dist
 
     def get_min_dist(self):
         '''
@@ -320,122 +349,69 @@ obj_list = [[6,10,0.5],[21,21,1],[14,17,3],[3,5,2]]
 #initialize a series of obstacles to be defined. 
 obstacles = initialize_objects(obj_list)
 
-def plot_circles(screen,colours):
-    '''
-    This function is used to plot circles
-    '''
-    for entry in obj_list:
-        cx,cy = entry[0]*(py_width/max_width)*100,entry[1]*(py_height/max_height)*100
-
-        r_val = entry[2]*(py_height/max_height)*100
-
-        pygame.draw.circle(screen,color=colours["GREEN"],center=(cx,cy),radius=r_val)
-        pygame.display.update()
-
-    time.sleep(1)
-
-def get_main_nodes():
+def get_main_nodes(queue):
     '''
     Runs the RRT algorithm and gets the path from source to dest. 
     '''
     rrt = rrt_initializer()
-    obtained_path,cond = rrt.run_rrt_algo()
-    print("CHECK REACHED:",cond)
-    return obtained_path,cond
 
+    obtained_path,dist,cond = rrt.run_rrt_algo()
+            
+    queue.put([dist,cond])
 
-def pygame_start():
-    path_vals,_ = get_main_nodes()
-    pygame.init()
-
-    #define the window and screen parameters
-    colours = {"BLACK": (0, 0, 0),"CYAN": (0, 255, 0),"RED": (255, 0, 0),"WHITE": (255, 255, 255),"BLUE" : (0, 0, 255),"GREEN":(0,128,0),"YELLOW":(255,255,0)}
-
-    screen = pygame.display.set_mode((py_width,py_height)) 
-
-    #render the background image
-    bg_img = pygame.image.load('Images/map.jpg')
-    bg_img = pygame.transform.scale(bg_img,(py_width,py_height))
-    screen.blit(bg_img,(0,0))
-    pygame.display.update()
-    time.sleep(0.35)
-
-    plot_circles(screen,colours)
-    # list_arr = test_nodes_basic()
-    img_2 = pygame.image.load('Images/basketball_hoop.png')
-    img_2 = pygame.transform.scale(img_2,(py_width/20,py_height/20))
-    img2_cx,img2_cy = goal[0]*(py_width/max_width)*100,goal[1]*(py_height/max_height)*100
-    screen.blit(img_2,(img2_cx,img2_cy))
-
-    pygame.display.update()
-
-    plot_list_nodes(path_vals,screen)
-    pygame.display.update()
-
-    print("Here")
-    time.sleep(3)
-
-    return screen
-
-def test_nodes_basic():
-    '''
-
-    Runs an example test to map a series of nodes from start to end destination. 
-
-    '''
-    #initializes the robot node from start
-    first_node = robotNode([0.5,0.5])
-    node_2 = robotNode([9,3])
-    node_3 = robotNode([8,7])
-    node_4 = robotNode([11,12])
-
-    #defines a series of node parents. 
-    node_2.parent = first_node
-    node_3.parent = node_2
-    node_4.parent = node_3
-
-    #forms a list of all robot nodes.
-    list_arr = [first_node,node_2,node_3,node_4]
-    return list_arr
-
-def plot_list_nodes(path_list,screen):
-    '''
-    This has the functions of plotting all elements on the path. 
-    '''
-    colours = {"BLACK": (0, 0, 0),"GREEN": (0, 255, 0),"RED": (255, 0, 0),"WHITE": (255, 255, 255),"BLUE" : (0, 0, 255),"CYAN":(0,128,0),"YELLOW":(255,255,0)}
-
-    for i,entry in enumerate(path_list):
-        node_x, node_y = entry.coords[0],entry.coords[1]
-        map_x, map_y = node_x*(py_width/max_width)*100, node_y*(py_height/max_height)*100
-
-        if i>=1:
-            #plot the lines between the two nodes
-            par_x,par_y = entry.parent.coords[0],entry.parent.coords[1]
-            map_parx, map_pary = par_x*(py_width/max_width)*100, par_y*(py_height/max_height)*100
-
-            pygame.draw.rect(screen,color=colours["RED"],rect=pygame.Rect(map_x,map_y,map_diff,map_diff),width=8)
-            pygame.draw.line(screen,color=colours["WHITE"],start_pos=(map_parx, map_pary),end_pos=(map_x, map_y),width=3)
-
-
-        elif i==0:
-            map_diff = 0.5*(py_width/max_width)*100
-            #define 4 rect params
-            # ld,lu,rd,ru = node_x-map_diff,node_x
-            print("START NODE:",node_x, node_y,map_x,map_y)
-            pygame.draw.rect(screen,color=colours["RED"],rect=pygame.Rect(map_x,map_y,map_diff,map_diff))
-
-        time.sleep(1)
-        pygame.display.update()
-    
-    return 
+    return obtained_path,dist,cond
 
 
 if __name__=="__main__":
     #runs an rrt initializer and obtains the path.
     #initialize a series of obstacles to be defined.
 
-    screen = pygame_start()
+    # screen = pygame_start()
     # plot_list_nodes(list_arr,screen)
     # obstacles = initialize_objects(obj_list)
     # rrt = rrt_initializer()
     # obtained_path = rrt.run_rrt_algo()
+    # field names  
+    fields = ['Path_len', 'Reached']
+    # name of csv file  
+    filename = "ack_1000iter.csv"
+    
+    rows = []
+    queue = multiprocessing.Queue()
+
+    for i in range(20):
+        try:
+            process = multiprocessing.Process(target=get_main_nodes,args=(queue,))
+            process.start() #foo is invoked in the background
+            process.join(60)#blocks the main process from executing
+
+            if queue.empty():
+                i-= 1
+                if process.is_alive():
+                    process.kill()
+                    process.join()
+                continue
+
+            val = queue.get()
+
+
+
+            with open("1000iter.txt","a") as file:
+                writeable_string = str(val[0])+","+str(val[1])+"\n"
+                print(writeable_string)
+                file.write(writeable_string)
+            file.close()
+
+            if i%20==0:
+                print("ITERATION ",i," VALUES:",val)
+            
+            if process.is_alive():
+                process.kill()
+                process.join()
+
+        except:
+            print("blocked process")
+
+
+        
+    
