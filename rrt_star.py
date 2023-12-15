@@ -1,5 +1,3 @@
-import numpy as np
-import argparse
 import math
 import random
 import shapely
@@ -9,10 +7,13 @@ import geopandas as gpd
 import shapely.geometry
 import pygame
 import time
+import argparse
+
 
 #define the window width and height params. 
 py_width,py_height = 750,750
 max_width,max_height = 2500,2500
+goal=[19,17]
 
 class robotNode():
 
@@ -26,8 +27,7 @@ class robotNode():
         self.coords = coords
         #initially have the robot angle as being none
         #might need to use the atan2 parameter
-        self.head_angle = 0
-        self.phi = 0
+        self.head_angle = None
         self.dist_travelled = 0
 
         #define the parent nodes and x,y paths. 
@@ -39,12 +39,14 @@ class robotNode():
 
 class rrt_initializer():
 
-    def __init__(self,max_iter=50,start=[0.5,0.5],end=[19,17]):
+    def __init__(self,max_iter=50,start=[0.5,0.5],end=goal,rad=10):
         #this assumes the robot starts from a position of 0,0 in the bottom left corner o.e.
         self.start = start
         self.end = end
         self.max_iter = max_iter
         self.node_list = []
+        self.rad = rad
+        self.reached = []
 
     def run_rrt_algo(self):
         #initialize the series of start and end nodes configurations
@@ -59,27 +61,21 @@ class rrt_initializer():
             par_idx,_ = self.get_parent(rand_sample)
             parent = self.node_list[par_idx]
 
-            p_x,p_y = parent.coords[0],parent.coords[1]
-            p_theta,p_phi = parent.head_angle, parent.phi
-            x,y,theta,phi,u1 = self.update_position(p_x,p_y,p_theta,p_phi)
-
             #get the coordinates from the parent node 
-            # new_coords = self.get_best_sample(parent)
-
-            new_node = robotNode([x,y])
-            #assign the new node values of theta and phi
-            new_node.head_angle,new_node.phi = theta,phi
-
-            #update the distance travelled 
-            new_node.dist_travelled = parent.dist_travelled+u1
-
-            #get the parent index and angle params. 
+            new_coords = self.get_best_sample(parent)
+            new_node = robotNode(new_coords)
             par_idx,angle = self.get_parent(new_node)
             new_node.angle = angle
             new_node.parent = parent
 
+            #get the distances to parent nodes
+            par_x, par_y, new_x,new_y = parent.coords[0],parent.coords[1],new_node.coords[0],new_node.coords[1]
+
+            dist = math.sqrt((par_x-new_x)**2+(par_y-new_y)**2)
+            new_node.dist_travelled = dist+parent.dist_travelled
+            self.rewire_tree(new_node)
             #form a shape to determine whether intersections occur. 
-            new_shape1 = map_rotations(x,y,angle,0.71)
+            new_shape1 = map_rotations(new_coords[0],new_coords[1],angle,0.71)
             e1,e2 = self.end[0],self.end[1]
 
             #check if the nodes intersect. 
@@ -88,66 +84,119 @@ class rrt_initializer():
 
             #ensures that we are minimally distant to the node
             if check_true:
-                path_list = self.return_path(new_node)
-                return path_list,"T"
+                self.reached.append(new_node)
+
+        #calculate the distances to nodes.
+        min_dist = float('inf')
+        min_ind = 10000
+        if len(self.reached)>0:
+            for i,entry in enumerate(self.reached):
+                get_dist = entry.dist_travelled
+                if get_dist<min_dist:
+                    min_ind = i
+                    min_dist = get_dist
+            
+            best_node = self.reached[min_ind]
+            return self.return_path(best_node),"T",best_node.dist_travelled
+        
+
+
 
         dist_idx = self.get_min_dist()
         min_dist_node = self.node_list[dist_idx]
 
-        return self.return_path(min_dist_node),"F"
+        return self.return_path(min_dist_node),"F",min_dist_node.dist_travelled
 
-    # Function to update the position and orientation
-    def update_position(self,init_x, init_y, init_theta,init_phi, L=1.0):
-        samples = 0
-        g_x,g_y = self.end[0],self.end[1]
-        min_dist = float('inf')
-        count = 0
-        #valid coordinates are generated however we do not 
-        top_x,top_y,top_theta,top_phi = 0,0,0,0
+    def rewire_tree(self,new_node):
 
-        while samples<10:
-            # Update the steering angle
-            #get the angle and phi params. 
-            u1 = random.randrange(2,80)/10
-            u2 = math.pi*random.randrange(0,360)/180
+        #check if this could be a parent
+        new_x, new_y = new_node.coords[0],new_node.coords[1]     
+        curr_dist = new_node.dist_travelled
 
-            phi = (init_phi+u2)%360
-            count += 1
-            phi = phi%360
-            # Update the orientation
-            theta = init_theta+(u1 / L) * np.tan(phi) 
-            # Update the position
-            x = init_x+u1 * np.cos(theta)
-            y = init_y+u1 * np.sin(theta)
-            if x<0 or y<0 or x>25 or y>25:
-                continue
 
-            p1,p2 = map_first_two_points(x,y,init_x,init_y,0,diff=0.5)
-            p3,p4 = map_first_two_points(x,y,init_x,init_y,0,diff=-0.5)
+        for entry in self.node_list:
+            x,y = entry.coords[0],entry.coords[1]
+            dist = math.sqrt((x-new_x)**2+(y-new_y)**2)
+            mod_dist = curr_dist + dist
+            #check if rewiring needs to be done
+            if dist<=self.rad and mod_dist<entry.dist_travelled:
+                angle = math.atan2(new_y-y,new_x-x)*180/math.pi
 
-            #obtain a distance to the goal 
-            goal_dist = (x-g_x)**2+(y-g_y)**2
-            goal_dist = math.sqrt(goal_dist)
+                p1,p2 = map_first_two_points(new_x,new_y,x,y,0,diff=0.5)
+                p3,p4 = map_first_two_points(new_x,new_y,x,y,0,diff=-0.5)
 
-            #gets approximately 2 line strings after this. 
-            get_segment_1 = shapely.geometry.LineString([p1, p2])
-            get_segment_2 = shapely.geometry.LineString([p3, p4])
-            avg_angle = (theta+init_theta)/2
-            get_shape1 = map_rotations(x,y,avg_angle,0.71)
+                #gets approximately 2 line strings after this. 
+                get_segment_1 = shapely.geometry.LineString([p1, p2])
+                get_segment_2 = shapely.geometry.LineString([p3, p4])
+                get_shape1 = map_rotations(new_x,new_y,angle,0.71)
 
-            collision_status = self.check_no_collision(get_segment_1,get_segment_2,get_shape1,obstacles)
+                collision_status = self.check_no_collision(get_segment_1,get_segment_2,get_shape1,obstacles)
 
-            if collision_status==True:
-                samples += 1
+                if collision_status==True:
+                    entry.parent = new_node
 
-                #obtain new parameters
-                if min_dist>goal_dist :
-                    top_x,top_y,top_theta,top_phi = x,y,theta,phi    
-                    best_u1 = u1          
-                    min_dist = goal_dist
+        return
+                
+            
 
-        #return u1 too as it contributes to the path length. 
-        return top_x,top_y,top_theta,top_phi,best_u1
+
+
+
+    def get_best_sample(self,parent):
+            '''
+            Runs an RRT function example to enable a better sample to be chosen
+
+            Args:
+            type(robotNode) --> parent
+
+            Output:
+            type(list) --> new_coords
+
+            '''
+            curr_coords = parent.coords
+            g_x, g_y = goal[0],goal[1]
+            min_dist = float('inf')
+            new_coords = []
+            samples = 0
+
+            while samples<10:
+
+                #get a series of distance and angle values
+                dist = random.randrange(2,80)/10
+                angle = math.pi*random.randrange(0,360)/180
+                x_shift,y_shift = dist*math.cos(angle),dist*math.sin(angle)
+                #obtain mappings to new x and y coordinates. 
+                new_x,new_y = curr_coords[0]+x_shift,curr_coords[1]+y_shift
+
+                if new_x<0 or new_y<0 or new_x>25 or new_y>25:
+                    continue
+
+                old_x, old_y = parent.coords[0],parent.coords[1]
+                # new_x,new_y = new_node.coords[0],new_node.coords[1]
+
+
+                #obtain a distance to the goal 
+                goal_dist = (new_x-g_x)**2+(new_y-g_y)**2
+                goal_dist = math.sqrt(goal_dist)
+
+                p1,p2 = map_first_two_points(new_x,new_y,old_x,old_y,0,diff=0.5)
+                p3,p4 = map_first_two_points(new_x,new_y,old_x,old_y,0,diff=-0.5)
+
+                #gets approximately 2 line strings after this. 
+                get_segment_1 = shapely.geometry.LineString([p1, p2])
+                get_segment_2 = shapely.geometry.LineString([p3, p4])
+                get_shape1 = map_rotations(new_x,new_y,angle,0.71)
+
+                collision_status = self.check_no_collision(get_segment_1,get_segment_2,get_shape1,obstacles)
+                #obtain the new sample. 
+                if collision_status==True:
+                    samples += 1
+
+                    if min_dist>goal_dist :
+                        new_coords = [new_x,new_y]
+                        min_dist = goal_dist
+
+            return new_coords
 
     def get_parent(self,new_node):
         '''
@@ -337,23 +386,28 @@ def get_main_nodes():
     '''
     Runs the RRT algorithm and gets the path from source to dest. 
     '''
+    #adds and defines the arguments present
     parser = argparse.ArgumentParser()
-
+    
+    #compulsory to define a goal and maximum number of iterations
     parser.add_argument('-g','--goal',type=float,nargs=2,help='Enter the X Coordinate of the Goal, Then the Y Coordinate Seperated by Spaces')
     parser.add_argument('-m','--max_iters',type=int,help="Enter Maximum Amount of Iterations")
     parser.add_argument('-s','--start',type=float,nargs=2,help="Enter Start X and Start Y Coordinates Seperated by Spaces.")
+    parser.add_argument('-r','--rad',type=float,help="Enter Radius for RRT* Algorithm")
 
+    #obtains the arguments present
     args = parser.parse_args()
     start = args.start if args.start!=None else [0.5,0.5] 
+    rad = args.rad if args.rad!=None else 5
 
-    rrt = rrt_initializer(max_iter=args.max_iters,start=start,end=args.goal)
-    obtained_path,cond = rrt.run_rrt_algo()
-    print("CHECK REACHED:",cond)
-    return obtained_path,cond,args
+    rrt = rrt_initializer(max_iter=args.max_iters,start=start,end=args.goal,rad=rad)
+    obtained_path,cond,dist = rrt.run_rrt_algo()
+    print("CHECK REACHED:",cond,dist)
+    return obtained_path,cond
 
 
 def pygame_start():
-    path_vals,_,args = get_main_nodes()
+    path_vals,_ = get_main_nodes()
     pygame.init()
 
     #define the window and screen parameters
@@ -372,7 +426,7 @@ def pygame_start():
     # list_arr = test_nodes_basic()
     img_2 = pygame.image.load('Images/basketball_hoop.png')
     img_2 = pygame.transform.scale(img_2,(py_width/20,py_height/20))
-    img2_cx,img2_cy = args.goal[0]*(py_width/max_width)*100,args.goal[1]*(py_height/max_height)*100
+    img2_cx,img2_cy = goal[0]*(py_width/max_width)*100,goal[1]*(py_height/max_height)*100
     screen.blit(img_2,(img2_cx,img2_cy))
 
     pygame.display.update()
@@ -447,3 +501,5 @@ if __name__=="__main__":
     # obstacles = initialize_objects(obj_list)
     # rrt = rrt_initializer()
     # obtained_path = rrt.run_rrt_algo()
+
+

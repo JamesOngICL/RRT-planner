@@ -7,11 +7,17 @@ import geopandas as gpd
 import shapely.geometry
 import pygame
 import time
+import argparse
+
+
+
+
 
 #define the window width and height params. 
 py_width,py_height = 750,750
 max_width,max_height = 2500,2500
-goal=[19,17]
+
+
 class robotNode():
 
     def __init__(self,coords):
@@ -25,6 +31,7 @@ class robotNode():
         #initially have the robot angle as being none
         #might need to use the atan2 parameter
         self.head_angle = None
+        self.dist_travelled = 0
 
         #define the parent nodes and x,y paths. 
         self.parent = None
@@ -35,12 +42,14 @@ class robotNode():
 
 class rrt_initializer():
 
-    def __init__(self,max_iter=200,start=[0.5,0.5],end=goal):
+    def __init__(self,end,max_iter=50,start=[0.5,0.5],rad=10):
         #this assumes the robot starts from a position of 0,0 in the bottom left corner o.e.
         self.start = start
         self.end = end
         self.max_iter = max_iter
         self.node_list = []
+        self.rad = rad
+        self.reached = []
 
     def run_rrt_algo(self):
         #initialize the series of start and end nodes configurations
@@ -62,6 +71,13 @@ class rrt_initializer():
             new_node.angle = angle
             new_node.parent = parent
 
+            #get the distances to parent nodes
+            par_x, par_y, new_x,new_y = parent.coords[0],parent.coords[1],new_node.coords[0],new_node.coords[1]
+
+            dist = math.sqrt((par_x-new_x)**2+(par_y-new_y)**2)
+            new_node.dist_travelled = dist+parent.dist_travelled
+            self.rewire_tree(new_node)
+
             #form a shape to determine whether intersections occur. 
             new_shape1 = map_rotations(new_coords[0],new_coords[1],angle,0.71)
             e1,e2 = self.end[0],self.end[1]
@@ -72,14 +88,59 @@ class rrt_initializer():
 
             #ensures that we are minimally distant to the node
             if check_true:
-                path_list = self.return_path(new_node)
-                return path_list,"T"
+                self.reached.append(new_node)
+
+        #calculate the distances to nodes.
+        min_dist = float('inf')
+        min_ind = 10000
+        if len(self.reached)>0:
+            for i,entry in enumerate(self.reached):
+                get_dist = entry.dist_travelled
+                if get_dist<min_dist:
+                    min_ind = i
+                    min_dist = get_dist
+            
+            best_node = self.reached[min_ind]
+            return self.return_path(best_node),"T",best_node.dist_travelled
+        
+
 
 
         dist_idx = self.get_min_dist()
         min_dist_node = self.node_list[dist_idx]
 
-        return self.return_path(min_dist_node),"F"
+        return self.return_path(min_dist_node),"F",min_dist_node.dist_travelled
+
+    def rewire_tree(self,new_node):
+
+        #check if this could be a parent
+        new_x, new_y = new_node.coords[0],new_node.coords[1]     
+        curr_dist = new_node.dist_travelled
+
+
+        for entry in self.node_list:
+            x,y = entry.coords[0],entry.coords[1]
+            dist = math.sqrt((x-new_x)**2+(y-new_y)**2)
+            mod_dist = curr_dist + dist
+            #check if rewiring needs to be done
+            if dist<=self.rad and mod_dist<entry.dist_travelled:
+                angle = math.atan2(new_y-y,new_x-x)*180/math.pi
+
+                p1,p2 = map_first_two_points(new_x,new_y,x,y,0,diff=0.5)
+                p3,p4 = map_first_two_points(new_x,new_y,x,y,0,diff=-0.5)
+
+                #gets approximately 2 line strings after this. 
+                get_segment_1 = shapely.geometry.LineString([p1, p2])
+                get_segment_2 = shapely.geometry.LineString([p3, p4])
+                get_shape1 = map_rotations(new_x,new_y,angle,0.71)
+
+                collision_status = self.check_no_collision(get_segment_1,get_segment_2,get_shape1,obstacles)
+
+                if collision_status==True:
+                    entry.parent = new_node
+
+        return
+                
 
     def get_best_sample(self,parent):
             '''
@@ -93,7 +154,7 @@ class rrt_initializer():
 
             '''
             curr_coords = parent.coords
-            g_x, g_y = goal[0],goal[1]
+            g_x, g_y = self.end[0],self.end[1]
             min_dist = float('inf')
             new_coords = []
             samples = 0
@@ -102,23 +163,24 @@ class rrt_initializer():
 
                 #get a series of distance and angle values
                 dist = random.randrange(2,80)/10
-                angle = 2*math.pi*random.randrange(0,360)/180
+                angle = math.pi*random.randrange(0,360)/180
                 x_shift,y_shift = dist*math.cos(angle),dist*math.sin(angle)
                 #obtain mappings to new x and y coordinates. 
                 new_x,new_y = curr_coords[0]+x_shift,curr_coords[1]+y_shift
 
-                if new_x<0 or new_y<0:
+                if new_x<0 or new_y<0 or new_x>25 or new_y>25:
                     continue
 
                 old_x, old_y = parent.coords[0],parent.coords[1]
                 # new_x,new_y = new_node.coords[0],new_node.coords[1]
 
-                p1,p2 = map_first_two_points(new_x,new_y,old_x,old_y,0,diff=0.5)
-                p3,p4 = map_first_two_points(new_x,new_y,old_x,old_y,0,diff=-0.5)
 
                 #obtain a distance to the goal 
                 goal_dist = (new_x-g_x)**2+(new_y-g_y)**2
                 goal_dist = math.sqrt(goal_dist)
+
+                p1,p2 = map_first_two_points(new_x,new_y,old_x,old_y,0,diff=0.5)
+                p3,p4 = map_first_two_points(new_x,new_y,old_x,old_y,0,diff=-0.5)
 
                 #gets approximately 2 line strings after this. 
                 get_segment_1 = shapely.geometry.LineString([p1, p2])
@@ -298,6 +360,78 @@ def map_rotations(x,y,angle,diff=0.5):
     
     return get_polygon
 
+def map_first_two_points(x1,y1,x2,y2,angle,diff=0.5):
+    '''
+    This function is used to map the first two points
+    onto the output space
+    '''
+
+    # establish and define a series of two points
+    point_1 = np.array([[-diff],[-diff]])
+    point_2 = np.array([[-diff],[diff]])
+    rad_ang = math.radians(angle)
+
+    # define the relevant rotation parameters for the model
+    rot_mat = np.array([[math.cos(rad_ang),-math.sin(rad_ang)],[math.sin(rad_ang),math.cos(rad_ang)]])
+
+    # obtain the rotations of the two points to get the outputs
+    rot_first = np.matmul(rot_mat,point_1)
+    rot_sec = np.matmul(rot_mat,point_2)
+
+    #gets the first and second points post rotation
+    map_first = [x1+rot_first[0],y1+rot_first[1]]
+    map_sec = [x2+rot_sec[0],y2+rot_sec[1]]
+
+    return map_first,map_sec
+
+def initialize_objects(obs_list):
+    '''
+
+    Inputs, Expect the Params of obs_list To Be Like:
+    obs_list = [[x_a,y_a,w_a],[x_b,y_b,w_b]]
+
+    Output:
+    type(list) --> represents the output values 
+
+    '''
+    render_obstacles = []
+
+    for entry in obs_list:
+        #initializes a circle on the map representing the set of points.
+        make_point = shapely.Point(entry[0],entry[1]).buffer(entry[2])
+
+        #append the given obstacle to the list of renderable obstacles
+        render_obstacles.append(make_point)
+    
+    return render_obstacles
+
+def map_rotations(x,y,angle,diff=0.5):
+    '''
+    This function defines a way of mapping the rotation values 
+    between to coordinate poins and information
+    
+    '''
+    points = [(-diff, -diff), (-diff, diff), 
+              (diff, diff), (diff, -diff)]
+
+    #define a matrix array with the coordinates
+    rad_ang = math.radians(angle)
+
+    #define the rotation points. 
+    rot_arr = np.array([[math.cos(rad_ang),-math.sin(rad_ang)],[math.sin(rad_ang),math.cos(rad_ang)]])
+ 
+    # Apply the rotation to each point
+    rotated_points = [np.matmul(rot_arr, np.array(p)).tolist() for p in points]
+    
+    for i,ind in enumerate(rotated_points):
+        sum_ind = [ind[0]+x,ind[1]+y]
+        rotated_points[i]=sum_ind
+    
+    # Create a polygon with the rotated points
+    get_polygon = shapely.Polygon(rotated_points)
+    
+    return get_polygon
+
 
 obj_list = [[6,10,0.5],[21,21,1],[14,17,3],[3,5,2]]
 
@@ -324,14 +458,27 @@ def get_main_nodes():
     '''
     Runs the RRT algorithm and gets the path from source to dest. 
     '''
-    rrt = rrt_initializer()
-    obtained_path,cond = rrt.run_rrt_algo()
-    print("CHECK REACHED:",cond)
-    return obtained_path,cond
+    #adds and defines the arguments present
+    parser = argparse.ArgumentParser()
+    
+    #compulsory to define a goal and maximum number of iterations
+    parser.add_argument('-g','--goal',type=float,nargs=2,help='Enter the X Coordinate of the Goal, Then the Y Coordinate Seperated by Spaces')
+    parser.add_argument('-m','--max_iters',type=int,help="Enter Maximum Amount of Iterations")
+    parser.add_argument('-s','--start',type=float,nargs=2,help="Enter Start X and Start Y Coordinates Seperated by Spaces.")
+
+    args = parser.parse_args()
+    start = args.start if args.start!=None else [0.5,0.5] 
+
+    rrt = rrt_initializer(end=args.goal,max_iter=args.max_iters,start=start)
+    obtained_path,cond,dist= rrt.run_rrt_algo()
+
+    print("CHECK REACHED:",cond,dist)
+    return obtained_path,cond,args
 
 
 def pygame_start():
-    path_vals,_ = get_main_nodes()
+    path_vals,_,args = get_main_nodes()
+    goal = args.goal
     pygame.init()
 
     #define the window and screen parameters
@@ -358,7 +505,6 @@ def pygame_start():
     plot_list_nodes(path_vals,screen)
     pygame.display.update()
 
-    print("Here")
     time.sleep(3)
 
     return screen
@@ -407,7 +553,6 @@ def plot_list_nodes(path_list,screen):
             map_diff = 0.5*(py_width/max_width)*100
             #define 4 rect params
             # ld,lu,rd,ru = node_x-map_diff,node_x
-            print("START NODE:",node_x, node_y,map_x,map_y)
             pygame.draw.rect(screen,color=colours["RED"],rect=pygame.Rect(map_x,map_y,map_diff,map_diff))
 
         time.sleep(1)
