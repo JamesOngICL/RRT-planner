@@ -1,6 +1,6 @@
 # RRT-planner
 
-RRT algorithms are an influential path-planning algorithm and oftentimes have greater capabilities in high dimensional planning space relative to A* algorithms.  Enclosed in this code, the current repository provides a path planning interface for the robotics as emboddied algorithms course. Specifically within this repository, the models explore the use of RRT for robot motion planning and a simulator is built and constructed to show robotic motion with RRT planners.
+RRT algorithms are an influential path-planning algorithm within robotics and oftentimes have greater capabilities in high dimensional planning space relative to A* algorithms.  Enclosed in this code, the current repository provides a path planning interface for the robotics as emboddied algorithms course. Specifically within this repository, the models explore the use of RRT for robot motion planning and a simulator is built and constructed to show robotic motion with RRT planners. An example of the RRT algorithm tree produced is shown attached here. 
 
 ![rrt_tree](https://github.com/JamesOngICL/RRT-planner/assets/73653114/c4eacf3f-39b7-4056-8f01-551d5f77ede6)
 
